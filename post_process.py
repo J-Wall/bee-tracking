@@ -166,6 +166,29 @@ def filter_traj(df, min_length=2, trim_start_frames=0, trim_end_frames=0):
         return df1
 
 
+def subsample(df, b):
+    '''
+    Subsamples timeseries coordinate by taking the average of bins.
+    Args:
+        df - DataFrame containing trajectories, indexed by 'traj'
+        b - int size of bins (must be odd)
+    Returns:
+        a much smaller dataframe that the one we started with
+    '''
+    assert b % 2 == 1
+    df1 = pd.DataFrame(columns=['traj', 't', 'x', 'y']).set_index('traj')
+    for traj in df.index.unique():
+        l = len(df.loc[traj])
+        a = df.loc[traj].iloc[0:l - l % b].values  # trim end for divisibility
+        a = a.reshape((a.shape[0] / b, b, a.shape[1]))
+        means = np.mean(a, axis=1)  # Efficiently reduce data
+        df2 = pd.DataFrame(data=means, columns=['t', 'x', 'y'],
+                           index=(np.zeros((means.shape[0])) + traj))
+        df1 = df1.append(df2)
+
+    return df1
+
+
 def back_process(df):
     '''
     NOT IMPLEMENTED PROPERLY
@@ -226,7 +249,10 @@ def traj_3d(df):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     for i in df.index.unique():
-        ax.plot(df.loc[i].x.values, df.loc[i].y.values, df.loc[i].t.values)
+        ax.plot(df.loc[i].x.values, df.loc[i].y.values, df.loc[i].t.values / 60)
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('Time (minutes)')
     plt.show()
 
 
@@ -307,11 +333,13 @@ def calculate_distances(df):
 
 
 def process_trajectories(traj_dir, cond_file, out_dir, time_offset=9,
-                         min_length=2, trim_start_frames=0, trim_end_frames=0):
+                         min_length=2, trim_start_frames=0, trim_end_frames=0,
+                         sub_sample=1):
     '''
-    Parses trajectory files, trims, calculates velocity and bee distances when
-    there are 2 bees. Then writes resulting dataframes to csv files for each
-    condition in each day. This is quite memory intensive and will take a while.
+    Parses trajectory files, trims, smooths, calculates velocity and bee
+    distances when there are 2 bees. Then writes resulting dataframes to csv
+    files for each condition in each day. This is quite memory intensive and
+    will take a while.
     Args:
         traj_dir - path of directory where raw trajectory files are stored
         cond_file - path of conditions file
@@ -321,6 +349,8 @@ def process_trajectories(traj_dir, cond_file, out_dir, time_offset=9,
         min_length - passed to filter_traj
         trim_start_frame - passed to filter_traj
         trim_end_frames - passed to filter_traj
+        sub_sample - odd integer determining size of bins to subsample,
+                     by default does not subsample
     Returns:
         None
     '''
@@ -333,6 +363,8 @@ def process_trajectories(traj_dir, cond_file, out_dir, time_offset=9,
             df = filter_traj(df, min_length=min_length,
                              trim_start_frames=trim_start_frames,
                              trim_end_frames=trim_end_frames)
+            if sub_sample > 1:
+                df = subsample(df, sub_sample)
             if cond_beenum[c] == 2:
                 ddf = calculate_distances(df)
                 ddf.to_csv('/'.join(
@@ -606,6 +638,96 @@ def all_perc_t_moving(directory, conditions=[1, 2, 3, 4], threshold=1):
     df = pd.DataFrame({'cond': conditions_list, 'date': date_list,
                        'perc_t_moving': perc_list}).set_index(['cond', 'date'])
     return df
+
+
+def box_count(df, iterations=3, initial_time_step=0.08, scaling_factor=2,
+              xy_boxes=100):
+    '''
+    Estimates fractal dimension of single trajectory provided by DataFrame.
+    Spatial box-size is kept fixed, and time box size is varied for fractal
+    dimension estimation.
+    Args:
+        df - DataFrame containing single trajectory
+        iterations - iterations of box-counting to perform
+        initial_time_step - size of initial time boxes
+        scaling_factor - factor to increase box sizes by each iteration
+        xy_boxes - number of spatial boxes (across one row/column)
+    Returns:
+        array with log(1/stepsize) down the first column and log(box_count) down
+        the second column.
+    '''
+    tmin, tmax = df.t.min(), df.t.max()
+    xmin, xmax = df.x.min(), df.x.max()
+    ymin, ymax = df.y.min(), df.y.max()
+    t = df.t.values - tmin,
+    x = (df.x.values - xmin) / (xmax - xmin)  # Normed
+    y = (df.y.values - ymin) / (ymax - ymin)  # Normed
+    # Spatial box edges:
+    xybins = [np.linspace(0.0, 1.0, num=xy_boxes) for i in range(2)]
+
+    # Determine box count for various time-step box sizes
+    box_count_list = []
+    for n in range(iterations):
+        print 'Scale iteration %i.' % (n + 1)
+        t_size = initial_time_step * scaling_factor ** n
+        assert t_size < tmax - tmin
+        box_number = int((tmax - tmin) / t_size)
+        box_count = 0
+        t_boxes, t_actual_size = np.linspace(0.0, tmax - tmin, num=box_number,
+                                             endpoint=False, retstep=True)
+        for time in t_boxes:
+            print '\rProgress %d / %d     ' % (time, tmax - tmin),
+            time_mask = np.bitwise_and(t >= time, t < time + t_actual_size)[0]
+            pos_hist = np.histogram2d(x[time_mask], y[time_mask], bins=xybins)
+            box_count += np.count_nonzero(pos_hist[0])
+        print '\rDone.                                               '
+        box_count_list.append([np.log(1.0 / t_actual_size), np.log(box_count)])
+
+    return np.array(box_count_list)
+
+
+def fractal_dim(box_counts):
+    '''
+    Estimates fractal dimension from box count data.
+    Args:
+        box_counts - ndarray with shape (n, 2) containing log(1/stepsize) down
+        the first column and log(box_count) down the second column.
+    Returns:
+        fractal_dimension - slope of linear regression of box_counts
+    '''
+    n = int(box_counts.shape[0])
+    x = np.sum(box_counts[:, 0]) / float(n)
+    y = np.sum(box_counts[:, 1]) / float(n)
+    x2 = np.sum(box_counts[:, 0] ** 2) / float(n)
+    xy = np.sum(box_counts[:, 0] * box_counts[:, 1]) / float(n)
+    fractal_dimension = (xy - x * y) / (x2 - x ** 2)  # Slope of linear reg.
+
+    return fractal_dimension
+
+
+def fractal_dims(df, iterations=3, initial_time_step=0.08, scaling_factor=2,
+                 xy_boxes=100):
+    '''
+    Estimates fractal dimension of trajectories in DataFrame.
+    Args:
+        df - DataFrame containing trajectories, indexed by 'traj'
+        iterations - iterations of box-counting to perform
+        initial_time_step - size of initial time boxes
+        scaling_factor - factor to increase box sizes by each iteration
+        xy_boxes - number of spatial boxes (across one row/column)
+    Returns:
+        array containing trajectory index, fractal dimension pairs
+    '''
+    dim_list = []
+    for traj in df.index.unique():
+        print 'Trajectory %i' % traj
+        bc = box_count(df.loc[traj], iterations=iterations,
+                       initial_time_step=initial_time_step,
+                       scaling_factor=scaling_factor,
+                       xy_boxes=xy_boxes)
+        dim_list.append([traj, fractal_dim(bc)])
+
+    return np.array(dim_list)
 
 
 def parse_args():
