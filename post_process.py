@@ -179,12 +179,13 @@ def subsample(df, b):
     df1 = pd.DataFrame(columns=['traj', 't', 'x', 'y']).set_index('traj')
     for traj in df.index.unique():
         l = len(df.loc[traj])
-        a = df.loc[traj].iloc[0:l - l % b].values  # trim end for divisibility
+        a = df.loc[traj].iloc[0:l - l % b][['t', 'x', 'y']].values
         a = a.reshape((a.shape[0] / b, b, a.shape[1]))
         means = np.mean(a, axis=1)  # Efficiently reduce data
         df2 = pd.DataFrame(data=means, columns=['t', 'x', 'y'],
                            index=(np.zeros((means.shape[0])) + traj))
-        df1 = df1.append(df2)
+        if len(df1) >= 4:
+            df1 = df1.append(df2)  # Remove extremely short trajectories
 
     return df1
 
@@ -280,13 +281,15 @@ def calculate_velocity(df, in_place=True):
     Returns:
         dataframe with two more columns, 'angle' and 'speed' (if in_place=False)
     '''
+    if in_place is False:
+        df = df.copy()
     # Calculate angle
-    pos_diff = df[['x', 'y']][1:].values - df[['x', 'y']][:-1].values
+    pos_diff = df[['x', 'y']].iloc[1:].values - df[['x', 'y']].iloc[:-1].values
     df['angle'] = np.insert(np.arctan2(pos_diff[:, 1], pos_diff[:, 0]), 0,
                             np.nan)
 
     # Time difference
-    t_diff = df.t[1:].values - df.t[:-1].values
+    t_diff = df.t.iloc[1:].values - df.t.iloc[:-1].values
 
     # Calculate speed
     pos_diff = pos_diff ** 2
@@ -294,14 +297,18 @@ def calculate_velocity(df, in_place=True):
                             0, np.nan)
 
     # Calculate rotation rate
-    rot = np.mod(df.angle[1:].values - df.angle[:-1].values, 2 * np.pi)
+    rot = np.mod(df.angle.iloc[1:].values - df.angle.iloc[:-1].values,
+                 2 * np.pi)
     rot[rot > np.pi] -= 2 * np.pi
     df['rotation'] = np.insert(rot / t_diff, 0, np.nan)
 
     # Remove velocity calculations between trajectories
     for i in df.index.unique():
         df.loc[i].iloc[0][['angle', 'speed', 'rotation']] = np.nan
-    return None
+    if in_place is True:
+        return None
+    else:
+        return df
 
 
 def calculate_distances(df):
@@ -404,7 +411,7 @@ def radius_hist(df, bins=25, centre=None, show=True):
     return r, h
 
 
-def produce_fig(df, distance_df=None, title=None, show=True):
+def produce_fig(df, distance_df=None, title=None, show=True, subsample_3d=5):
     '''
     Produces figures for a given DataFrame
     Args:
@@ -412,6 +419,7 @@ def produce_fig(df, distance_df=None, title=None, show=True):
         distance_df - optional distance DataFrame
         title - Main figure title
         show - show figure
+        subsample_3d - odd integer to pass to subsample for plotting of 3d traj
     Returns:
         fig
     '''
@@ -425,8 +433,9 @@ def produce_fig(df, distance_df=None, title=None, show=True):
 
     # 3D plot of trajectories
     plt.subplot(231, projection='3d')
-    for i in df.index.unique():
-        plt.plot(df.loc[i].x.values, df.loc[i].y.values, df.loc[i].t.values)
+    df1 = subsample(df, subsample_3d)
+    for i in df1.index.unique():
+        plt.plot(df1.loc[i].x.values, df1.loc[i].y.values, df1.loc[i].t.values)
     plt.title('Trajectories')
     plt.tick_params(axis='both', which='major', labelsize=8)
 
@@ -520,7 +529,7 @@ def all_figs(pdf_name, conditions=[1, 2, 3, 4], data_dir='ProcessedFiles'):
             fig = fig_from_vars(condition, date_str, directory=data_dir,
                                 show=False)
             pdf_file.savefig()
-            del fig
+            plt.close(fig)
 
     pdf_file.close()
 

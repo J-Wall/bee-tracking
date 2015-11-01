@@ -22,15 +22,13 @@ def get_features(df, sub_sample=1, features=['speed', 'rotation']):
         df1 - subsampled df
     '''
     df1 = subsample(df, 5)
-    l = np.array([len(df1.loc[traj]) for traj in df1.index.unique()])
-    trajs = df1.index.unique()[l >= 4]  # Too short trajectories not be included
     calculate_velocity(df1)
     feature_list = []
-    for traj in trajs:
+    for traj in df1.index.unique():
         feature_list.append(df1.loc[traj][features].values[2:])
 
     return (np.vstack(feature_list), np.array([len(a) for a in feature_list]),
-            df1.loc[trajs])
+            df1.loc)
 
 
 def fit_hmm(df, n_components, sub_sample=1, features=['speed', 'rotation'],
