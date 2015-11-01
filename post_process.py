@@ -184,7 +184,7 @@ def subsample(df, b):
         means = np.mean(a, axis=1)  # Efficiently reduce data
         df2 = pd.DataFrame(data=means, columns=['t', 'x', 'y'],
                            index=(np.zeros((means.shape[0])) + traj))
-        if len(df1) >= 4:
+        if len(df2) >= 4:
             df1 = df1.append(df2)  # Remove extremely short trajectories
 
     return df1
