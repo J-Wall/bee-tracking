@@ -8,47 +8,55 @@ import pandas as pd
 from post_process import subsample, calculate_velocity
 
 
-def get_features(df, sub_sample=1, features=['speed', 'rotation']):
+def sub_calc(df, subsample_factor):
+    '''
+    Convenience function to subsample and calculate velocity
+    Args:
+        df - input DataFrame
+        subsample_factor - factor to pass to subsample
+    Returns:
+        subsampled and velocity-calculated DataFrame
+    '''
+    df1 = subsample(df, subsample_factor)
+    calculate_velocity(df1)
+    return df1
+
+
+def get_features(df, features=['speed', 'rotation']):
     '''
     Extract feature matrix from trajectory DataFrame for HMM fitting
     Args:
         df - trajectory DataFrame
-        sub_sample - subsample df. Default, don't subsample
         features - features to include. Default ['speed', 'rotation']
     Returns:
         X, lengths, df1
         X - features matrix
         lengths - lengths of samples
-        df1 - subsampled df
     '''
-    df1 = subsample(df, 5)
-    calculate_velocity(df1)
     feature_list = []
-    for traj in df1.index.unique():
-        feature_list.append(df1.loc[traj][features].values[2:])
+    for traj in df.index.unique():
+        feature_list.append(df.loc[traj][features].values[2:])
 
-    return (np.vstack(feature_list), np.array([len(a) for a in feature_list]),
-            df1.loc)
+    return (np.vstack(feature_list), np.array([len(a) for a in feature_list]))
 
 
-def fit_hmm(df, n_components, sub_sample=1, features=['speed', 'rotation'],
+def fit_hmm(df, n_components, features=['speed', 'rotation'],
             **kwargs):
     '''
     Fits a Gaussian HMM to the velocity data
     Args:
         df - dataframe containing positional data to be processed
         n_components - number of hidden states
-        sub_sample - subsample DataFrame
         features - features to use in model fitting
         **kwargs passed to GaussianHMM
     Returns:
-        model, df1
+        model
     '''
-    X, lengths, df1 = get_features(df, sub_sample=sub_sample, features=features)
+    X, lengths = get_features(df, features=features)
     model = GaussianHMM(n_components, **kwargs)
     model.fit(X, lengths=lengths)
 
-    return model, df1
+    return model
 
 
 def decode_states(df, model, features=['speed', 'rotation']):
@@ -60,6 +68,7 @@ def decode_states(df, model, features=['speed', 'rotation']):
         features - features used for model fitting
     Returns:
         DataFrame indexed by 'traj' with values 'logprob' (logprob of path)
+        'state' columns is added to df in place.
     '''
     lnp_list = []
     df['state'] = np.nan
@@ -71,6 +80,100 @@ def decode_states(df, model, features=['speed', 'rotation']):
     lnp_df = pd.DataFrame(lnp_list, columns=['traj', 'lnp']).set_index('traj')
 
     return lnp_df
+
+
+def fit_from_csv(path, n_components=2, subsample_factor=1,
+                 features=['speed', 'rotation'], **kwargs):
+    '''
+    Load trajectories from csv, subsample, and fit HMM
+    Args:
+        path - path of csv file
+        n_components - number of hidden states (default 2)
+        subsample_factor - subsample data
+        features - columns to fit data to
+        **kwargs passed to GaussianHMM
+    Returns:
+        model, DataFrame
+    '''
+    print 'Loading %s' % path
+    df = pd.read_csv(path, index_col='traj')
+    print 'Subsampling... Factor: %d' % subsample_factor
+    df1 = sub_calc(df, subsample_factor)
+    print 'Fitting model...'
+    model = fit_hmm(df1, n_components, features=features, **kwargs)
+    return model, df1
+
+
+def decode_from_csv(path, model, subsample_factor=1,
+                    features=['speed', 'rotation']):
+    '''
+    Load trajectories from csv, subsample, and fit HMM
+    Args:
+        path - path of csv file
+        model - HMM model which has been fit
+        subsample_factor - subsample data
+        features - columns which model has been fit to
+    Returns:
+        df - trajectory DataFrame
+        lnp_df - log probability DataFrame
+    '''
+    print 'Loading %s' % path
+    df = pd.read_csv(path, index_col='traj')
+    print 'Subsampling... Factor: %d' % subsample_factor
+    df1 = sub_calc(df, subsample_factor)
+    print 'Running Viterbi algorithm...'
+    lnp_df = decode_states(df1, model, features=features)
+    return df1, lnp_df
+
+
+def count_states(df):
+    '''
+    Convenience function to count states in decoded DataFrame.
+    Args:
+        df - decoded DataFrame
+    Returns:
+        array with shape (n_components, )
+    '''
+    return np.bincount(df.state.dropna().astype(np.int64))
+
+
+def fit_and_decode(training_data, apply_to=None, n_components=2,
+                   subsample_factor=1, features=['speed', 'rotation'],
+                   **kwargs):
+    '''
+    Fits model to training_data, then applies model to decode states for each
+    dataset in apply_to.
+    Args:
+        training_data - path of training dataset (trajectory csv)
+        apply_to - list of paths of trajectory csv files to decode with model
+                   if None, just apply to training_data.
+        n_components - number of hidden states
+        subsample_factor - subsample factor to apply to all files
+        features - columns to fit model to
+        **kwargs passed to GaussianHMM
+    Returns:
+        model - fitted model
+        lnp_df_list - list of log probabilities of ML paths through HMM
+        state_counts - array of shape (len(apply_to), n_components)
+    '''
+    model, df = fit_from_csv(training_data, n_components=n_components,
+                             subsample_factor=subsample_factor,
+                             features=features, **kwargs)
+    lnp_df_list = []
+    state_counts_list = []
+    if apply_to is None:
+        lnp_df = decode_states(df, model, features=features)
+        lnp_df_list.append(lnp_df_list)
+        state_counts_list.append(count_states(df))
+    else:
+        for path in apply_to:
+            df, lnp_df = decode_from_csv(path, model,
+                                         subsample_factor=subsample_factor,
+                                         features=features)
+            lnp_df_list.append(lnp_df_list)
+            state_counts_list.append(count_states(df))
+
+    return model, lnp_df_list, np.vstack(state_counts_list)
 
 
 def get_state_times(df, n_bees=1):
