@@ -10,3 +10,5 @@ multi_tracker.py performs video processing steps. Default settings were found to
 cond_gen.py should be run prior to multi_tracker.py for batch processing, although multi_tracker can also be run on it's own.
 
 post_process.py provides useful functions for interactively manipulating trajectory data but is not currently implemented to be run as a program.
+
+traj_hmm.py provides functions for fitting a Hidden Markov Model with Gaussian emission probabilities.
