@@ -3,6 +3,7 @@
 
 from hmmlearn.hmm import GaussianHMM
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
 from post_process import subsample, calculate_velocity
@@ -137,42 +138,45 @@ def count_states(df):
     return np.bincount(df.state.dropna().astype(np.int64))
 
 
-def fit_and_decode(training_data, apply_to=None, n_components=2,
+def fit_and_decode(traj_data, n_components=2,
                    subsample_factor=1, features=['speed', 'rotation'],
-                   **kwargs):
+                   plot_figs=False, n_bees=None, **kwargs):
     '''
-    Fits model to training_data, then applies model to decode states for each
-    dataset in apply_to.
+    Fits model to each traj_data, then applies model to decode states.
     Args:
-        training_data - path of training dataset (trajectory csv)
-        apply_to - list of paths of trajectory csv files to decode with model
-                   if None, just apply to training_data.
+        traj_data - list of paths of training dataset (trajectory csv)
         n_components - number of hidden states
         subsample_factor - subsample factor to apply to all files
         features - columns to fit model to
+        plot_figs - False or path str. plot figs to a PDF file. Must specify
+                    n_bees.
+        n_bees - number of bees (required for plotting)
         **kwargs passed to GaussianHMM
     Returns:
         model - fitted model
         lnp_df_list - list of log probabilities of ML paths through HMM
         state_counts - array of shape (len(apply_to), n_components)
     '''
-    model, df = fit_from_csv(training_data, n_components=n_components,
-                             subsample_factor=subsample_factor,
-                             features=features, **kwargs)
+    if isinstance(plot_figs, str):
+        pdf_file = PdfPages(plot_figs)
     lnp_df_list = []
     state_counts_list = []
-    if apply_to is None:
+    for path in traj_data:
+        model, df = fit_from_csv(path, n_components=n_components,
+                                 subsample_factor=subsample_factor,
+                                 features=features, **kwargs)
         lnp_df = decode_states(df, model, features=features)
-        lnp_df_list.append(lnp_df_list)
+        lnp_df_list.append(lnp_df)
         state_counts_list.append(count_states(df))
-    else:
-        for path in apply_to:
-            df, lnp_df = decode_from_csv(path, model,
-                                         subsample_factor=subsample_factor,
-                                         features=features)
-            lnp_df_list.append(lnp_df_list)
-            state_counts_list.append(count_states(df))
+        if isinstance(plot_figs, str):
+            print 'Producing figure...'
+            fig = plot_states(df, n_bees=n_bees)
+            fig.suptitle(path)
+            pdf_file.savefig()
+            plt.close(fig)
 
+    if isinstance(plot_figs, str):
+        pdf_file.close()
     return model, lnp_df_list, np.vstack(state_counts_list)
 
 
@@ -234,7 +238,7 @@ def plot_states(df, n_bees=1, colors=('red', 'blue', 'yellow', 'green')):
         figure
     '''
     xranges, yranges, states = get_state_times(df, n_bees=n_bees)
-    fig = plt.figure()
+    fig = plt.figure(figsize=(20, 10))
     ax_x = fig.add_subplot(311)
     ax_y = fig.add_subplot(312, sharex=ax_x, sharey=ax_x)
     ax_s = fig.add_subplot(313, sharex=ax_x)

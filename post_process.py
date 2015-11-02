@@ -274,7 +274,7 @@ def traj_2d(df, show=True):
 
 def calculate_velocity(df, in_place=True):
     '''
-    Calculates angle, speed and rotation at each time point
+    Calculates angle, speed, rotation and distance from centre at each timepoint
     Args:
         df - DataFrame indexed by 'traj'
         in_place - process df in place and return None
@@ -301,6 +301,11 @@ def calculate_velocity(df, in_place=True):
                  2 * np.pi)
     rot[rot > np.pi] -= 2 * np.pi
     df['rotation'] = np.insert(rot / t_diff, 0, np.nan)
+
+    # Calculate distance from centre
+    centre = 0.5 * df.x.max(), 0.5 * df.y.max()
+    r = np.sqrt((df.x.values - centre[0]) ** 2 + (df.y.values - centre[1]) ** 2)
+    df['d_mid'] = r
 
     # Remove velocity calculations between trajectories
     for i in df.index.unique():
