@@ -168,7 +168,7 @@ def filter_traj(df, min_length=2, trim_start_frames=0, trim_end_frames=0):
 
 def subsample(df, b):
     '''
-    Subsamples timeseries coordinate by taking the average of bins.
+    Subsamples timeseries coordinate by taking the median of bins.
     Args:
         df - DataFrame containing trajectories, indexed by 'traj'
         b - int size of bins (must be odd)
@@ -181,9 +181,9 @@ def subsample(df, b):
         l = len(df.loc[traj])
         a = df.loc[traj].iloc[0:l - l % b][['t', 'x', 'y']].values
         a = a.reshape((a.shape[0] / b, b, a.shape[1]))
-        means = np.mean(a, axis=1)  # Efficiently reduce data
-        df2 = pd.DataFrame(data=means, columns=['t', 'x', 'y'],
-                           index=(np.zeros((means.shape[0])) + traj))
+        medians = np.median(a, axis=1)  # Efficiently reduce data
+        df2 = pd.DataFrame(data=medians, columns=['t', 'x', 'y'],
+                           index=(np.zeros((medians.shape[0])) + traj))
         if len(df2) >= 4:
             df1 = df1.append(df2)  # Remove extremely short trajectories
 
